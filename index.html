@@ -1303,8 +1303,16 @@ function renderListView(container) {
 
   // Week strip
   html += '<div class="week-strip">';
-  const currentWeek = getCurrentWeekNum();
-  state._listWeek = state._listWeek || currentWeek;
+  // Default to the first week that has data, fallback to current week
+  if (!state._listWeek) {
+    state._listWeek = getCurrentWeekNum();
+    for (const w of weeks) {
+      const hasData = (data.existing || []).some(e => (e.week || getWeekForDate(e.plannedDate, period.start, period.end)) === w.num)
+        || (data.prospecting || []).some(e => (e.week || getWeekForDate(e.date, period.start, period.end)) === w.num)
+        || (data.newCustomers || []).some(e => (e.week || getWeekForDate(e.date, period.start, period.end)) === w.num);
+      if (hasData) { state._listWeek = w.num; break; }
+    }
+  }
   weeks.forEach(w => {
     const locked = isWeekLocked(w.num);
     const active = (state._listWeek === w.num) ? 'active' : '';
