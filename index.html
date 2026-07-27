@@ -819,6 +819,88 @@ function initData() {
 }
 
 // ==================== EXPORT / IMPORT ====================
+// ==================== EXPORT TO EXCEL ====================
+function exportToExcel(scope) {
+  const period = state.currentPeriod;
+  const weeks = getWeeksInPeriod(period.start, period.end);
+
+  // Determine which reps to export
+  let reps;
+  if (scope === 'all') {
+    reps = CONFIG.salesReps.filter(r => r !== 'sales operation');
+  } else if (state.isManager) {
+    reps = [state.viewingRep];
+  } else {
+    reps = [getActiveRep()];
+  }
+
+  // Build rows: [類別, 業務員, 週次, 日期範圍, 客戶名稱/姓名, 區域, 計劃日期, 狀態, 備註]
+  const rows = [];
+  // Header
+  rows.push(['類別', '業務員', '週次', '日期範圍', '客戶名稱', '區域', '日期', '狀態', '備註/計劃']);
+
+  reps.forEach(repName => {
+    const data = getRepData(repName, period.start);
+
+    // Existing Customers
+    (data.existing || []).forEach(e => {
+      const wk = e.week || getWeekForDate(e.plannedDate, period.start, period.end);
+      if (scope === 'week' && wk !== state._listWeek) return;
+      const w = weeks.find(x => x.num === wk);
+      const statusLabel = (STATUS_OPTIONS.find(s => s.value === e.status) || {}).label || e.status || '計劃中';
+      const area = extractArea(e.customer || '');
+      rows.push(['Existing', repName, '第' + wk + '週', w ? w.range : '', (e.customer || '').replace(' [' + area + ']', '').trim(), area, e.plannedDate || '', statusLabel, e.notes || '']);
+    });
+
+    // Prospecting
+    (data.prospecting || []).forEach(e => {
+      const wk = e.week || getWeekForDate(e.date, period.start, period.end);
+      if (scope === 'week' && wk !== state._listWeek) return;
+      const w = weeks.find(x => x.num === wk);
+      const statusLabel = (TASK_STATUS.find(s => s.value === e.status) || {}).label || e.status || '進行中';
+      rows.push(['Prospecting', repName, '第' + wk + '週', w ? w.range : '', e.customerName || '', '', e.date || '', statusLabel, e.notes || '']);
+    });
+
+    // New Customers
+    (data.newCustomers || []).forEach(e => {
+      const wk = e.week || getWeekForDate(e.date, period.start, period.end);
+      if (scope === 'week' && wk !== state._listWeek) return;
+      const w = weeks.find(x => x.num === wk);
+      const statusLabel = (TASK_STATUS.find(s => s.value === e.status) || {}).label || e.status || '進行中';
+      rows.push(['New', repName, '第' + wk + '週', w ? w.range : '', e.customerName || '', '', e.date || '', statusLabel, e.notes || '']);
+    });
+  });
+
+  if (rows.length <= 1) { showToast('暫無數據可導出', 'error'); return; }
+
+  // Build HTML table for XLS
+  let xlsHtml = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>拜訪計劃</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body><table border="1">';
+  rows.forEach(row => {
+    xlsHtml += '<tr>';
+    row.forEach(cell => {
+      xlsHtml += '<td>' + escapeXml(String(cell)) + '</td>';
+    });
+    xlsHtml += '</tr>';
+  });
+  xlsHtml += '</table></body></html>';
+
+  const blob = new Blob([xlsHtml], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const scopeLabel = scope === 'week' ? 'WK' + state._listWeek : (scope === 'month' ? '全月' : '全部');
+  a.download = '拜訪計劃_' + period.label + '_' + scopeLabel + '.xls';
+  a.click(); URL.revokeObjectURL(a.href);
+  showToast('已導出 ' + (rows.length - 1) + ' 筆記錄', 'success');
+}
+
+function extractArea(customerStr) {
+  if (!customerStr) return '';
+  const m = customerStr.match(/\[([^\]]+)\]/);
+  return m ? m[1] : '';
+}
+
+function escapeXml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
 function exportData() {
   const exportObj = { data: state.data, settings: CONFIG, customerList: state.customerList, exportDate: new Date().toISOString() };
   const blob = new Blob([JSON.stringify(exportObj, null, 2)], { type: 'application/json' });
@@ -1322,11 +1404,19 @@ function renderListView(container) {
   });
   html += '</div>';
 
+  // Export toolbar
+  html += '<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">' +
+    '<span style="font-size:12px;color:var(--text-light);">📥 導出：</span>' +
+    '<button class="btn btn-sm btn-outline" onclick="exportToExcel(\'week\')">📊 導出本週 Excel</button>' +
+    '<button class="btn btn-sm btn-outline" onclick="exportToExcel(\'month\')">📊 導出全月 Excel</button>' +
+    '<button class="btn btn-sm btn-outline" onclick="exportToExcel(\'all\')">📊 導出全部（所有業務員）</button>' +
+    '</div>';
+
   const weekNum = state._listWeek;
   const canEdit = canEditWeek(weekNum);
 
   if (!canEdit) {
-    html += '<div class="lock-banner">🔒 <strong>第' + weekNum + '週數據已鎖定</strong>。如需修改，請聯繫 sales operation。</div>';
+    html += '<div class="lock-banner">🔒 <strong>第' + weekNum + '週數據已鎖定</strong>���如需修改，請聯繫 sales operation。</div>';
   }
 
   // Existing customer table for this week
